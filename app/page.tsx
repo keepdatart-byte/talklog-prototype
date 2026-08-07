@@ -75,18 +75,11 @@ type SpeechRecognitionWindow = typeof window & {
 };
 
 type TimelineItem =
-  | {
-      kind: "utterance";
-      id: string;
-      at: number;
-      utterance: Utterance;
-    }
-  | {
-      kind: "event";
-      id: string;
-      at: number;
-      event: ConversationEvent;
-    };
+  {
+    id: string;
+    at: number;
+    utterance: Utterance;
+  };
 
 const processingSteps = [
   "話者を分けています",
@@ -158,34 +151,14 @@ function shortDuration(ms: number) {
 }
 
 function sessionTimeline(session: ConversationSession): TimelineItem[] {
-  return [
-    ...session.utterances
-      .filter((utterance) => !utterance.hidden)
-      .map((utterance) => ({
-        kind: "utterance" as const,
-        id: utterance.id,
-        at: utterance.startTimeMs,
-        utterance
-      })),
-    ...session.events.map((event) => ({
-      kind: "event" as const,
-      id: event.id,
-      at: event.startTimeMs,
-      event
+  return session.utterances
+    .filter((utterance) => !utterance.hidden)
+    .map((utterance) => ({
+      id: utterance.id,
+      at: utterance.startTimeMs,
+      utterance
     }))
-  ].sort((a, b) => a.at - b.at);
-}
-
-function eventLabel(event: ConversationEvent) {
-  if (event.type === "laugh") return "😂 みんなで笑った";
-  if (event.type === "silence") {
-    const gap = event.endTimeMs ? Math.round((event.endTimeMs - event.startTimeMs) / 1000) : 1;
-    return `… ${gap}秒の間`;
-  }
-  if (event.type === "toast") return "🥂";
-  if (event.type === "photo") return "▣ 写真を撮った";
-  if (event.type === "movement") return "↔ 移動した";
-  return "・ できごと";
+    .sort((a, b) => a.at - b.at);
 }
 
 function getSessionDurationMs(session: ConversationSession) {
@@ -1388,15 +1361,6 @@ export default function SetlogPrototype() {
     return (
       <div className="timeline">
         {items.map((item) => {
-          if (item.kind === "event") {
-            return (
-              <div className={`timeline-event ${item.event.type}`} key={item.id}>
-                <span className="timeline-time">{formatTimelineTime(session, item.event.startTimeMs)}</span>
-                <span>{eventLabel(item.event)}</span>
-              </div>
-            );
-          }
-
           const person = item.utterance.personId ? peopleById.get(item.utterance.personId) : null;
           return (
             <div className="timeline-utterance" key={item.id} onDoubleClick={() => openCorrection(item.utterance)}>
