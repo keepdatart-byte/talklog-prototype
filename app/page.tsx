@@ -184,6 +184,15 @@ function getSessionDurationMs(session: ConversationSession) {
   return Math.max(utteranceEnd, eventEnd, 1000);
 }
 
+function getPlaybackUtterances(session: ConversationSession) {
+  return session.utterances.filter((utterance) => !utterance.hidden).sort((a, b) => a.startTimeMs - b.startTimeMs);
+}
+
+function getPlaybackDurationMs(session: ConversationSession) {
+  const utteranceEnd = Math.max(0, ...getPlaybackUtterances(session).map((utterance) => utterance.endTimeMs));
+  return Math.max(utteranceEnd, 1000);
+}
+
 function typedUtteranceText(utterance: Utterance, playbackMs: number) {
   if (playbackMs >= utterance.endTimeMs) return utterance.text;
   const glyphs = Array.from(utterance.text);
@@ -361,8 +370,8 @@ export default function SetlogPrototype() {
       return;
     }
 
-    const totalMs = getSessionDurationMs(activeSession);
-    const timeline = sessionTimeline(activeSession);
+    const totalMs = getPlaybackDurationMs(activeSession);
+    const utterances = getPlaybackUtterances(activeSession);
     let frame = 0;
 
     const tick = (timestamp: number) => {
@@ -374,13 +383,12 @@ export default function SetlogPrototype() {
       setPlaybackMs((current) => {
         let next = Math.min(totalMs, current + delta);
         if (compressSilence) {
-          const nextItem = timeline.find((item) => item.at > next);
-          const hasActive = timeline.some((item) => {
-            const end = item.kind === "utterance" ? item.utterance.endTimeMs : item.event.endTimeMs ?? item.event.startTimeMs + 1000;
-            return item.at <= next && end >= next;
+          const nextUtterance = utterances.find((utterance) => utterance.startTimeMs > next);
+          const hasActive = utterances.some((utterance) => {
+            return utterance.startTimeMs <= next && utterance.endTimeMs >= next;
           });
-          if (!hasActive && nextItem && nextItem.at - next > 5000) {
-            next = nextItem.at - 900;
+          if (!hasActive && nextUtterance && nextUtterance.startTimeMs - next > 5000) {
+            next = nextUtterance.startTimeMs - 900;
           }
         }
         if (next >= totalMs) {
@@ -1411,14 +1419,10 @@ export default function SetlogPrototype() {
   function renderPlayback() {
     if (!activeSession) return null;
     const session = activeSession;
-    const totalMs = getSessionDurationMs(session);
+    const totalMs = getPlaybackDurationMs(session);
     const progress = Math.min(100, (playbackMs / totalMs) * 100);
-    const timeline = sessionTimeline(session);
-    const visibleTimeline = timeline.filter((item) => item.at <= playbackMs);
-    const activeItemId =
-      visibleTimeline
-        .slice()
-        .sort((a, b) => b.at - a.at)[0]?.id ?? timeline[0]?.id;
+    const utterances = getPlaybackUtterances(session);
+    const visibleUtterances = utterances.filter((utterance) => utterance.startTimeMs <= playbackMs);
 
     return (
       <section className="screen-section playback-screen">
@@ -1441,27 +1445,18 @@ export default function SetlogPrototype() {
           })}
         </div>
         <div className="chat-playback-list" ref={playbackScrollerRef}>
-          {visibleTimeline.map((item) => {
-            const active = item.id === activeItemId;
-            if (item.kind === "event") {
-              return (
-                <div className={active ? `chat-event active ${item.event.type}` : `chat-event ${item.event.type}`} key={item.id}>
-                  <span>{eventLabel(item.event)}</span>
-                  <small>{formatTimelineTime(session, item.event.startTimeMs)}</small>
-                </div>
-              );
-            }
-            const person = item.utterance.personId ? peopleById.get(item.utterance.personId) : null;
+          {visibleUtterances.map((utterance) => {
+            const person = utterance.personId ? peopleById.get(utterance.personId) : null;
             const isMine = person?.id === "person-me" || person?.name === "自分";
-            const isTyping = playbackMs >= item.utterance.startTimeMs && playbackMs < item.utterance.endTimeMs;
-            const shownText = typedUtteranceText(item.utterance, playbackMs);
+            const isTyping = playbackMs >= utterance.startTimeMs && playbackMs < utterance.endTimeMs;
+            const shownText = typedUtteranceText(utterance, playbackMs);
             return (
-              <div className={isMine ? "chat-message mine" : "chat-message other"} key={item.id}>
+              <div className={isMine ? "chat-message mine" : "chat-message other"} key={utterance.id}>
                 {!isMine ? <img src={person?.drawingDataUrl ?? assetPath("/icon.svg")} alt="" /> : null}
                 <div className="chat-stack">
                   <div className="chat-meta">
                     <span>{person?.name ?? "わからない"}</span>
-                    <time>{formatTimelineTime(session, item.utterance.startTimeMs)}</time>
+                    <time>{formatTimelineTime(session, utterance.startTimeMs)}</time>
                   </div>
                   <div className={isTyping ? "chat-bubble typing" : "chat-bubble"}>
                     <span>{shownText}</span>
