@@ -184,6 +184,15 @@ function getSessionDurationMs(session: ConversationSession) {
   return Math.max(utteranceEnd, eventEnd, 1000);
 }
 
+function typedUtteranceText(utterance: Utterance, playbackMs: number) {
+  if (playbackMs >= utterance.endTimeMs) return utterance.text;
+  const glyphs = Array.from(utterance.text);
+  const duration = Math.max(700, utterance.endTimeMs - utterance.startTimeMs);
+  const elapsed = Math.max(0, playbackMs - utterance.startTimeMs);
+  const visibleCount = Math.max(1, Math.ceil((elapsed / duration) * glyphs.length));
+  return glyphs.slice(0, visibleCount).join("");
+}
+
 function getAlbumIcon(title?: string) {
   const label = title ?? "";
   if (label.includes("焼肉")) return "grill";
@@ -235,6 +244,7 @@ export default function SetlogPrototype() {
   const recordingEndedAtRef = useRef<string>("");
   const processingStartedRef = useRef(false);
   const playbackLastTickRef = useRef<number | null>(null);
+  const playbackScrollerRef = useRef<HTMLDivElement | null>(null);
   const speechRecognitionRef = useRef<BrowserSpeechRecognition | null>(null);
   const speechShouldRunRef = useRef(false);
   const speechRestartTimerRef = useRef<number | null>(null);
@@ -384,6 +394,13 @@ export default function SetlogPrototype() {
     frame = window.requestAnimationFrame(tick);
     return () => window.cancelAnimationFrame(frame);
   }, [screen, playbackRunning, playbackSpeed, compressSilence, activeSession]);
+
+  useEffect(() => {
+    if (screen !== "playback") return;
+    const node = playbackScrollerRef.current;
+    if (!node) return;
+    node.scrollTop = node.scrollHeight;
+  }, [screen, playbackMs, activeSession?.id]);
 
   const filteredSessions = useMemo(() => {
     return sessions.filter((session) => {
@@ -727,7 +744,7 @@ export default function SetlogPrototype() {
   function openPlayback(sessionId: string) {
     setActiveSessionId(sessionId);
     setPlaybackMs(0);
-    setPlaybackRunning(false);
+    setPlaybackRunning(true);
     setScreen("playback");
   }
 
@@ -1175,10 +1192,10 @@ export default function SetlogPrototype() {
           type="button"
           className="primary-button huge"
           onClick={() => {
-            if (tempSession) openDetail(tempSession.id);
+            if (tempSession) openPlayback(tempSession.id);
           }}
         >
-          ALBUMを見る
+          振り返る
           <span className="button-arrow">›</span>
         </button>
         <button type="button" className="secondary-button" onClick={() => setScreen("home")}>
@@ -1397,14 +1414,15 @@ export default function SetlogPrototype() {
     const totalMs = getSessionDurationMs(session);
     const progress = Math.min(100, (playbackMs / totalMs) * 100);
     const timeline = sessionTimeline(session);
+    const visibleTimeline = timeline.filter((item) => item.at <= playbackMs);
     const activeItemId =
-      timeline
-        .filter((item) => item.at <= playbackMs)
+      visibleTimeline
+        .slice()
         .sort((a, b) => b.at - a.at)[0]?.id ?? timeline[0]?.id;
 
     return (
       <section className="screen-section playback-screen">
-        {renderTopBar("PLAY")}
+        {renderTopBar("REPLAY")}
         <div className="playback-head">
           <h1>{session.title || "名前のない日"}</h1>
           <p>
@@ -1422,26 +1440,35 @@ export default function SetlogPrototype() {
             ) : null;
           })}
         </div>
-        <div className="playback-list">
-          {timeline.map((item) => {
+        <div className="chat-playback-list" ref={playbackScrollerRef}>
+          {visibleTimeline.map((item) => {
             const active = item.id === activeItemId;
             if (item.kind === "event") {
               return (
-                <div className={active ? `play-row event active ${item.event.type}` : `play-row event ${item.event.type}`} key={item.id}>
-                  <span className="timeline-time">{formatTimelineTime(session, item.event.startTimeMs)}</span>
+                <div className={active ? `chat-event active ${item.event.type}` : `chat-event ${item.event.type}`} key={item.id}>
                   <span>{eventLabel(item.event)}</span>
+                  <small>{formatTimelineTime(session, item.event.startTimeMs)}</small>
                 </div>
               );
             }
             const person = item.utterance.personId ? peopleById.get(item.utterance.personId) : null;
+            const isMine = person?.id === "person-me" || person?.name === "自分";
+            const isTyping = playbackMs >= item.utterance.startTimeMs && playbackMs < item.utterance.endTimeMs;
+            const shownText = typedUtteranceText(item.utterance, playbackMs);
             return (
-              <div className={active ? "play-row utterance active" : "play-row utterance"} key={item.id}>
-                <span className="timeline-time">{formatTimelineTime(session, item.utterance.startTimeMs)}</span>
-                <img src={person?.drawingDataUrl ?? assetPath("/icon.svg")} alt="" />
-                <div>
-                  <strong>{person?.name ?? "わからない"}</strong>
-                  <p>{item.utterance.text}</p>
+              <div className={isMine ? "chat-message mine" : "chat-message other"} key={item.id}>
+                {!isMine ? <img src={person?.drawingDataUrl ?? assetPath("/icon.svg")} alt="" /> : null}
+                <div className="chat-stack">
+                  <div className="chat-meta">
+                    <span>{person?.name ?? "わからない"}</span>
+                    <time>{formatTimelineTime(session, item.utterance.startTimeMs)}</time>
+                  </div>
+                  <div className={isTyping ? "chat-bubble typing" : "chat-bubble"}>
+                    <span>{shownText}</span>
+                    {isTyping ? <i aria-hidden="true" /> : null}
+                  </div>
                 </div>
+                {isMine ? <img src={person?.drawingDataUrl ?? assetPath("/icon.svg")} alt="" /> : null}
               </div>
             );
           })}
@@ -1452,7 +1479,7 @@ export default function SetlogPrototype() {
               -10
             </button>
             <button type="button" className="primary-button small" onClick={() => setPlaybackRunning((current) => !current)}>
-              {playbackRunning ? "一時停止" : "再開"}
+              {playbackRunning ? "一時停止" : playbackMs > 0 ? "再開" : "再生"}
             </button>
             <button
               type="button"
