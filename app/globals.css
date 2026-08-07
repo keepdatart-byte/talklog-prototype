@@ -275,6 +275,27 @@ p {
   flex-direction: column;
 }
 
+.onair-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 2px solid var(--ink);
+  background: var(--paper);
+  box-shadow: var(--soft-shadow);
+  padding: 6px 9px;
+  color: var(--pink-dark);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.onair-badge span {
+  width: 9px;
+  height: 9px;
+  background: var(--pink);
+  box-shadow: 13px 0 0 rgba(255, 45, 135, 0.3);
+  animation: blink 850ms steps(2, end) infinite;
+}
+
 .home-copy {
   font-size: 31px;
   line-height: 1.45;
@@ -300,6 +321,55 @@ p {
   background: rgba(255, 255, 255, 0.48);
   box-shadow: var(--shadow);
   transform: rotate(-1deg);
+}
+
+.mic-record-button {
+  position: relative;
+  width: 244px;
+  height: 244px;
+  display: grid;
+  place-items: center;
+  margin: 70px auto 10px;
+  border: 3px solid var(--ink);
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.64);
+  box-shadow: 8px 8px 0 var(--ink);
+  cursor: pointer;
+  transform: rotate(-1deg);
+}
+
+.mic-record-button:active {
+  transform: translate(3px, 3px) rotate(-1deg);
+  box-shadow: 5px 5px 0 var(--ink);
+}
+
+.mic-record-button strong {
+  position: absolute;
+  left: 14px;
+  top: 12px;
+  color: var(--pink-dark);
+  font-size: 14px;
+  letter-spacing: 0;
+}
+
+.mic-ring {
+  position: absolute;
+  inset: 26px;
+  border: 2px dashed var(--pink);
+  opacity: 0.66;
+  animation: onair-pulse 1.6s steps(5, end) infinite;
+}
+
+.mic-ring.two {
+  inset: 44px;
+  animation-delay: 0.35s;
+}
+
+.home-tap {
+  color: var(--pink-dark);
+  text-align: center;
+  font-size: 16px;
+  font-weight: 900;
 }
 
 .pixel-mic {
@@ -360,6 +430,13 @@ p {
   50% {
     opacity: 0.25;
     transform: translateY(2px);
+  }
+}
+
+@keyframes onair-pulse {
+  50% {
+    opacity: 0.22;
+    transform: scale(1.07);
   }
 }
 
@@ -498,6 +575,12 @@ p {
   margin: 22px 0;
 }
 
+.participant-list.compact {
+  gap: 8px;
+  margin: 12px 0;
+  padding-bottom: 164px;
+}
+
 .participant-row,
 .person-choice,
 .album-card,
@@ -526,6 +609,44 @@ p {
 .participant-row.selected {
   background: rgba(255, 45, 135, 0.14);
   transform: translate(-1px, 1px);
+}
+
+.count-picker {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin: 18px 0 8px;
+}
+
+.count-choice {
+  min-height: 74px;
+  border: 2px solid var(--ink);
+  background: rgba(255, 255, 255, 0.62);
+  box-shadow: var(--soft-shadow);
+  color: var(--ink);
+  font-size: 31px;
+  font-weight: 900;
+}
+
+.count-choice span {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.count-choice.selected {
+  background: var(--pink);
+  color: white;
+  transform: translate(-1px, 1px);
+}
+
+.count-choice.selected span {
+  color: white;
+}
+
+.section-label {
+  margin: 18px 0 0;
+  font-size: 14px;
 }
 
 .participant-row img,
@@ -579,6 +700,18 @@ p {
 
 .title-input {
   font-size: 24px;
+  font-weight: 900;
+  text-align: center;
+}
+
+.auto-title {
+  width: 100%;
+  border: 2px solid var(--ink);
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: var(--shadow);
+  padding: 16px;
+  color: var(--pink-dark);
+  font-size: 28px;
   font-weight: 900;
   text-align: center;
 }
@@ -1279,6 +1412,7 @@ p {
   overflow: hidden;
   padding-top: 18px;
   padding-bottom: 10px;
+  position: relative;
 }
 
 .playback-head {
@@ -1317,6 +1451,53 @@ p {
   border-top: 2px solid rgba(34, 34, 34, 0.16);
   border-bottom: 2px solid rgba(34, 34, 34, 0.16);
   padding: 14px 2px 18px;
+}
+
+.laugh-float-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.laugh-emoji {
+  position: absolute;
+  bottom: 92px;
+  left: 50%;
+  font-size: 25px;
+  filter: drop-shadow(2px 2px 0 rgba(34, 34, 34, 0.25));
+  animation: laugh-float 1.35s steps(8, end) forwards;
+}
+
+.laugh-emoji.e0 {
+  left: 18%;
+  animation-delay: 0ms;
+}
+
+.laugh-emoji.e1 {
+  left: 32%;
+  animation-delay: 120ms;
+}
+
+.laugh-emoji.e2 {
+  left: 47%;
+  animation-delay: 40ms;
+}
+
+.laugh-emoji.e3 {
+  left: 61%;
+  animation-delay: 180ms;
+}
+
+.laugh-emoji.e4 {
+  left: 74%;
+  animation-delay: 80ms;
+}
+
+.laugh-emoji.e5 {
+  left: 86%;
+  animation-delay: 240ms;
 }
 
 .chat-message {
@@ -1488,6 +1669,20 @@ p {
   50%,
   100% {
     opacity: 0;
+  }
+}
+
+@keyframes laugh-float {
+  0% {
+    opacity: 0;
+    transform: translateY(20px) scale(0.75);
+  }
+  15% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-210px) scale(1.15);
   }
 }
 

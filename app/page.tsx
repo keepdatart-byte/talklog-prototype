@@ -15,6 +15,7 @@ type Screen =
   | "finish"
   | "processing"
   | "process-error"
+  | "post-participants"
   | "speaker-assign"
   | "title"
   | "done"
@@ -99,6 +100,15 @@ const eventFilterOptions: { value: ConversationEvent["type"]; label: string }[] 
   { value: "photo", label: "写真" },
   { value: "toast", label: "乾杯" },
   { value: "movement", label: "移動" }
+];
+
+const titleKeywordRules = [
+  { title: "焼肉", keywords: ["焼肉", "タン", "カルビ", "ハラミ", "肉"] },
+  { title: "ドライブ", keywords: ["ドライブ", "車", "運転", "高速"] },
+  { title: "カフェ", keywords: ["カフェ", "コーヒー", "ラテ"] },
+  { title: "旅行", keywords: ["旅行", "北海道", "温泉", "ホテル"] },
+  { title: "ごはん", keywords: ["ごはん", "ご飯", "食べ", "うまい", "おいしい"] },
+  { title: "映画", keywords: ["映画", "ドラマ", "アニメ"] }
 ];
 
 const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
@@ -196,10 +206,20 @@ function getPlaybackDurationMs(session: ConversationSession) {
 function typedUtteranceText(utterance: Utterance, playbackMs: number) {
   if (playbackMs >= utterance.endTimeMs) return utterance.text;
   const glyphs = Array.from(utterance.text);
-  const duration = Math.max(700, utterance.endTimeMs - utterance.startTimeMs);
+  const duration = Math.min(900, Math.max(260, glyphs.length * 45));
   const elapsed = Math.max(0, playbackMs - utterance.startTimeMs);
   const visibleCount = Math.max(1, Math.ceil((elapsed / duration) * glyphs.length));
   return glyphs.slice(0, visibleCount).join("");
+}
+
+function suggestTitleFromSession(session: ConversationSession) {
+  const joinedText = session.utterances.map((utterance) => utterance.text).join(" ");
+  const matched = titleKeywordRules.find((rule) => rule.keywords.some((keyword) => joinedText.includes(keyword)));
+  if (matched) return matched.title;
+
+  const firstText = session.utterances.find((utterance) => utterance.text.trim().length > 0)?.text ?? "";
+  const cleaned = firstText.replace(/[、。！？!?「」『』（）()\s]/g, "").slice(0, 10);
+  return cleaned || `${formatDate(session.startedAt)}の会話`;
 }
 
 function getAlbumIcon(title?: string) {
@@ -221,6 +241,8 @@ export default function SetlogPrototype() {
   const [activePersonId, setActivePersonId] = useState<string | null>(null);
   const [newPersonName, setNewPersonName] = useState("");
   const [titleInput, setTitleInput] = useState("");
+  const [participantCount, setParticipantCount] = useState(3);
+  const [personPickerReturnScreen, setPersonPickerReturnScreen] = useState<"participants" | "post-participants">("participants");
   const [assignmentIndex, setAssignmentIndex] = useState(0);
   const [processingLog, setProcessingLog] = useState<string[]>([]);
   const [micMessage, setMicMessage] = useState<string | null>(null);
@@ -340,8 +362,11 @@ export default function SetlogPrototype() {
 
         temporaryAudioRef.current = null;
         setTempSession(session);
+        setTitleInput(suggestTitleFromSession(session));
+        setParticipantCount(Math.min(4, Math.max(2, Object.keys(session.speakerAssignments).length || 3)));
+        setSelectedParticipantIds(session.participantIds);
         setAssignmentIndex(0);
-        setScreen("title");
+        setScreen("post-participants");
       } catch {
         recordingChunksRef.current = [];
         temporaryAudioRef.current = null;
@@ -387,8 +412,8 @@ export default function SetlogPrototype() {
           const hasActive = utterances.some((utterance) => {
             return utterance.startTimeMs <= next && utterance.endTimeMs >= next;
           });
-          if (!hasActive && nextUtterance && nextUtterance.startTimeMs - next > 5000) {
-            next = nextUtterance.startTimeMs - 900;
+          if (!hasActive && nextUtterance && nextUtterance.startTimeMs - next > 2600) {
+            next = nextUtterance.startTimeMs - 420;
           }
         }
         if (next >= totalMs) {
@@ -449,11 +474,33 @@ export default function SetlogPrototype() {
       if (current.includes(personId)) {
         return current.filter((id) => id !== personId);
       }
-      if (current.length >= 4) {
+      const limit = screen === "post-participants" ? participantCount : 4;
+      if (current.length >= limit) {
         return current;
       }
       return [...current, personId];
     });
+  }
+
+  function changeParticipantCount(count: number) {
+    setParticipantCount(count);
+    setSelectedParticipantIds((current) => current.slice(0, count));
+  }
+
+  function confirmPostParticipants(assignVoices: boolean) {
+    if (!tempSession) return;
+    const participantIds = selectedParticipantIds.slice(0, participantCount);
+    const updated = {
+      ...tempSession,
+      participantIds
+    };
+    setTempSession(updated);
+    setAssignmentIndex(0);
+    if (assignVoices && participantIds.length > 0) {
+      setScreen("speaker-assign");
+      return;
+    }
+    saveConversation(undefined, updated);
   }
 
   function saveNewPerson(drawingDataUrl: string) {
@@ -467,9 +514,10 @@ export default function SetlogPrototype() {
       createdAt: new Date().toISOString()
     };
     replacePeople([...people, person]);
-    setSelectedParticipantIds((current) => [...current.filter((id) => id !== person.id), person.id].slice(-4));
+    const limit = personPickerReturnScreen === "post-participants" ? participantCount : 4;
+    setSelectedParticipantIds((current) => [...current.filter((id) => id !== person.id), person.id].slice(-limit));
     setNewPersonName("");
-    setScreen("participants");
+    setScreen(personPickerReturnScreen);
   }
 
   async function startCapture() {
@@ -698,6 +746,8 @@ export default function SetlogPrototype() {
     setTempSession(null);
     setTitleInput("");
     setAssignmentIndex(0);
+    setParticipantCount(3);
+    setSelectedParticipantIds([]);
   }
 
   function assignSpeaker(personId: string | null) {
@@ -705,12 +755,15 @@ export default function SetlogPrototype() {
     const speakerIds = Object.keys(tempSession.speakerAssignments);
     const speakerId = speakerIds[assignmentIndex];
     if (!speakerId) {
-      setScreen("title");
+      saveConversation(undefined, tempSession);
       return;
     }
+    const nextParticipantIds =
+      personId && !tempSession.participantIds.includes(personId) ? [...tempSession.participantIds, personId] : tempSession.participantIds;
 
     const updated: ConversationSession = {
       ...tempSession,
+      participantIds: nextParticipantIds,
       speakerAssignments: {
         ...tempSession.speakerAssignments,
         [speakerId]: personId
@@ -722,18 +775,19 @@ export default function SetlogPrototype() {
 
     setTempSession(updated);
     if (assignmentIndex >= speakerIds.length - 1) {
-      setScreen("title");
+      saveConversation(undefined, updated);
     } else {
       setAssignmentIndex((current) => current + 1);
     }
   }
 
-  function saveConversation(title?: string) {
-    if (!tempSession) return;
+  function saveConversation(title?: string, sourceSession?: ConversationSession) {
+    const session = sourceSession ?? tempSession;
+    if (!session) return;
     const trimmed = title?.trim();
     const saved: ConversationSession = {
-      ...tempSession,
-      title: trimmed || undefined,
+      ...session,
+      title: trimmed || suggestTitleFromSession(session),
       audioDeleted: true,
       createdAt: new Date().toISOString()
     };
@@ -930,43 +984,31 @@ export default function SetlogPrototype() {
       <section className="screen-section home-screen">
         <header className="brand-block">
           {renderMiniBrand()}
-          <div className="memory-stay">
-            {renderHearts()}
-            <span>
-              MEMORIES
-              <br />
-              STAY.
-            </span>
+          <div className="onair-badge">
+            <span />
+            ON AIR
           </div>
         </header>
 
-        <div className="home-copy">
-          <span>TODAY,</span>
-          <p>今日は、</p>
-          <p>どんな会話を残す？</p>
-        </div>
-
-        <div className="mic-stage" aria-hidden="true">
-          <div className="pixel-mic">
-            <span />
-            <span />
-            <span />
-          </div>
-        </div>
-
         <button
           type="button"
-          className="primary-button huge"
+          className="mic-record-button"
           onClick={() => {
             resetDraft();
             beginRecordingFlow([]);
           }}
+          aria-label="会話を記録する"
         >
-          <span className="button-symbol">♬</span>
-          今日を残す
-          <span className="button-arrow">›</span>
+          <span className="mic-ring one" />
+          <span className="mic-ring two" />
+          <div className="pixel-mic" aria-hidden="true">
+            <span />
+            <span />
+            <span />
+          </div>
+          <strong>REC</strong>
         </button>
-        <p className="subcopy">タップして、今日の会話を残そう</p>
+        <p className="home-tap">TAP</p>
         {renderPrivacyNote(true)}
 
         <div className="bottom-actions">
@@ -1005,7 +1047,14 @@ export default function SetlogPrototype() {
             );
           })}
         </div>
-        <button type="button" className="secondary-button" onClick={() => setScreen("add-person")}>
+        <button
+          type="button"
+          className="secondary-button"
+          onClick={() => {
+            setPersonPickerReturnScreen("participants");
+            setScreen("add-person");
+          }}
+        >
           ＋ 新しい人を追加
         </button>
         <div className="sticky-action">
@@ -1136,6 +1185,74 @@ export default function SetlogPrototype() {
     );
   }
 
+  function renderPostParticipants() {
+    if (!tempSession) return null;
+    const detectedCount = Object.keys(tempSession.speakerAssignments).length;
+    const canAssign = selectedParticipantIds.length > 0;
+    return (
+      <section className="screen-section">
+        {renderTopBar("WHO")}
+        <h1>
+          何人で
+          <br />
+          話してた？
+        </h1>
+        <div className="count-picker" aria-label="人数">
+          {[2, 3, 4].map((count) => (
+            <button
+              type="button"
+              className={participantCount === count ? "count-choice selected" : "count-choice"}
+              key={count}
+              onClick={() => changeParticipantCount(count)}
+            >
+              {count}
+              <span>人</span>
+            </button>
+          ))}
+        </div>
+        <p className="microcopy">検出された声: {detectedCount || "?"} / 人物はあとで直せます</p>
+
+        <h2 className="section-label">いた人</h2>
+        <div className="participant-list compact">
+          {people.map((person) => {
+            const selected = selectedParticipantIds.includes(person.id);
+            return (
+              <button
+                type="button"
+                className={selected ? "participant-row selected" : "participant-row"}
+                key={person.id}
+                onClick={() => toggleParticipant(person.id)}
+              >
+                <img src={person.drawingDataUrl} alt="" />
+                <span className="check">{selected ? "☑" : "□"}</span>
+                <span>{person.name}</span>
+              </button>
+            );
+          })}
+        </div>
+        <button
+          type="button"
+          className="secondary-button"
+          onClick={() => {
+            setPersonPickerReturnScreen("post-participants");
+            setScreen("add-person");
+          }}
+        >
+          ＋ 新しい人を追加
+        </button>
+        <div className="sticky-action">
+          <button type="button" className="primary-button" disabled={!canAssign} onClick={() => confirmPostParticipants(true)}>
+            声にあてはめる
+            <span className="button-arrow">›</span>
+          </button>
+          <button type="button" className="text-button" onClick={() => confirmPostParticipants(false)}>
+            あとで設定する
+          </button>
+        </div>
+      </section>
+    );
+  }
+
   function renderSpeakerAssign() {
     if (!tempSession) return null;
     const speakerIds = Object.keys(tempSession.speakerAssignments);
@@ -1144,8 +1261,8 @@ export default function SetlogPrototype() {
       return (
         <section className="screen-section center-screen">
           <h1>声の確認が終わりました</h1>
-          <button type="button" className="primary-button huge" onClick={() => setScreen("title")}>
-            次へ
+          <button type="button" className="primary-button huge" onClick={() => saveConversation(undefined, tempSession)}>
+            保存する
           </button>
         </section>
       );
@@ -1171,27 +1288,25 @@ export default function SetlogPrototype() {
           </button>
         </div>
         <div className="notice-card">誰が話したか分からない部分があります<br />あとから確認できます</div>
+        <button type="button" className="text-button" onClick={() => saveConversation(undefined, tempSession)}>
+          残りはあとで
+        </button>
       </section>
     );
   }
 
   function renderTitleInput() {
+    const suggested = tempSession ? suggestTitleFromSession(tempSession) : titleInput;
     return (
       <section className="screen-section center-screen">
-        <h1>今日に名前をつける？</h1>
-        <input
-          className="title-input"
-          value={titleInput}
-          onChange={(event) => setTitleInput(event.target.value)}
-          placeholder="例：焼肉"
-          aria-label="会話タイトル"
-        />
-        <button type="button" className="primary-button huge" onClick={() => saveConversation(titleInput)}>
+        <h1>名前をつけました</h1>
+        <div className="auto-title">{suggested || "名前のない日"}</div>
+        <button type="button" className="primary-button huge" onClick={() => saveConversation(suggested)}>
           保存する
           <span className="button-arrow">›</span>
         </button>
         <button type="button" className="secondary-button" onClick={() => saveConversation(undefined)}>
-          あとでつける
+          このまま保存
         </button>
       </section>
     );
@@ -1440,6 +1555,11 @@ export default function SetlogPrototype() {
     const progress = Math.min(100, (playbackMs / totalMs) * 100);
     const utterances = getPlaybackUtterances(session);
     const visibleUtterances = utterances.filter((utterance) => utterance.startTimeMs <= playbackMs);
+    const activeLaughEvents = session.events.filter((event) => {
+      if (event.type !== "laugh") return false;
+      const end = event.endTimeMs ?? event.startTimeMs + 1400;
+      return event.startTimeMs <= playbackMs && end >= playbackMs;
+    });
 
     return (
       <section className="screen-section playback-screen">
@@ -1465,6 +1585,17 @@ export default function SetlogPrototype() {
         ) : (
           <div className="later-note wide compact">人物はあとで設定できます</div>
         )}
+        {activeLaughEvents.length > 0 ? (
+          <div className="laugh-float-layer" aria-hidden="true">
+            {activeLaughEvents.flatMap((event, eventIndex) =>
+              Array.from({ length: 6 }, (_, index) => (
+                <span className={`laugh-emoji e${index}`} key={`${event.id}-${eventIndex}-${index}`}>
+                  😂
+                </span>
+              ))
+            )}
+          </div>
+        ) : null}
         <div className="chat-playback-list" ref={playbackScrollerRef}>
           {visibleUtterances.map((utterance) => {
             const person = utterance.personId ? peopleById.get(utterance.personId) : null;
@@ -1672,6 +1803,7 @@ export default function SetlogPrototype() {
   if (screen === "finish") content = renderFinish();
   if (screen === "processing") content = renderProcessing();
   if (screen === "process-error") content = renderProcessError();
+  if (screen === "post-participants") content = renderPostParticipants();
   if (screen === "speaker-assign") content = renderSpeakerAssign();
   if (screen === "title") content = renderTitleInput();
   if (screen === "done") content = renderDone();
