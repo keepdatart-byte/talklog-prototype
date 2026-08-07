@@ -658,6 +658,30 @@ p {
   margin: 18px 0;
 }
 
+.later-note {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  border: 1px dashed var(--ink);
+  background: rgba(255, 255, 255, 0.62);
+  color: var(--muted);
+  padding: 7px 10px;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.later-note.wide {
+  justify-content: center;
+  width: 100%;
+  margin: 8px 0 12px;
+  border-width: 2px;
+}
+
+.later-note.compact {
+  min-height: 30px;
+  margin-top: 0;
+}
+
 .person-chip {
   display: inline-flex;
   align-items: center;

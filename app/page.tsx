@@ -263,7 +263,7 @@ export default function SetlogPrototype() {
     const loadedSessions = loadSessions();
     setPeople(loadedPeople);
     setSessions(loadedSessions);
-    setSelectedParticipantIds(loadedPeople.slice(0, 2).map((person) => person.id));
+    setSelectedParticipantIds([]);
     setActiveSessionId(loadedSessions[0]?.id ?? null);
     setIsOffline(typeof navigator !== "undefined" ? !navigator.onLine : false);
 
@@ -322,7 +322,7 @@ export default function SetlogPrototype() {
           temporaryAudioRef.current,
           recordingChunksRef.current,
           capturedTranscriptsRef.current,
-          selectedParticipantIds.length
+          selectedParticipantIds.length || 3
         );
         if (cancelled) return;
 
@@ -341,7 +341,7 @@ export default function SetlogPrototype() {
         temporaryAudioRef.current = null;
         setTempSession(session);
         setAssignmentIndex(0);
-        setScreen("speaker-assign");
+        setScreen("title");
       } catch {
         recordingChunksRef.current = [];
         temporaryAudioRef.current = null;
@@ -670,8 +670,9 @@ export default function SetlogPrototype() {
     speechRecognitionRef.current = null;
   }
 
-  function beginRecordingFlow() {
-    if (selectedParticipantIds.length < 2 || selectedParticipantIds.length > 4) return;
+  function beginRecordingFlow(participantIds = selectedParticipantIds) {
+    if (participantIds.length > 4) return;
+    setSelectedParticipantIds(participantIds);
     const nowIso = new Date().toISOString();
     recordingStartedAtRef.current = recordingStartedAtRef.current || nowIso;
     recordingEndedAtRef.current = "";
@@ -796,9 +797,14 @@ export default function SetlogPrototype() {
     if (!activeSession || !correction || pendingSpeakerPersonId === undefined) return;
     const target = activeSession.utterances.find((utterance) => utterance.id === correction.utteranceId);
     if (!target) return;
+    const nextParticipantIds =
+      pendingSpeakerPersonId && !activeSession.participantIds.includes(pendingSpeakerPersonId)
+        ? [...activeSession.participantIds, pendingSpeakerPersonId]
+        : activeSession.participantIds;
 
     const updated = {
       ...activeSession,
+      participantIds: nextParticipantIds,
       speakerAssignments:
         scope === "all"
           ? {
@@ -953,7 +959,7 @@ export default function SetlogPrototype() {
           className="primary-button huge"
           onClick={() => {
             resetDraft();
-            setScreen("participants");
+            beginRecordingFlow([]);
           }}
         >
           <span className="button-symbol">♬</span>
@@ -1004,7 +1010,7 @@ export default function SetlogPrototype() {
         </button>
         <div className="sticky-action">
           <p className="microcopy">2〜4人を選んでください</p>
-          <button type="button" className="primary-button" disabled={!canStart} onClick={beginRecordingFlow}>
+          <button type="button" className="primary-button" disabled={!canStart} onClick={() => beginRecordingFlow()}>
             このメンバーで残す
             <span className="button-arrow">›</span>
           </button>
@@ -1048,7 +1054,13 @@ export default function SetlogPrototype() {
           {renderHearts()}
           <span>{shortDuration(elapsed)}</span>
         </div>
-        <div className="mini-portraits">{selectedPeople.map((person) => renderPersonChip(person, true))}</div>
+        <div className="mini-portraits">
+          {selectedPeople.length > 0 ? (
+            selectedPeople.map((person) => renderPersonChip(person, true))
+          ) : (
+            <span className="later-note">人物はあとで設定できます</span>
+          )}
+        </div>
         <div className="signal-box" aria-label="音声の取得状態">
           <span style={{ height: `${24 + audioLevel * 52}px` }} />
           <span style={{ height: `${42 + audioLevel * 40}px` }} />
@@ -1087,7 +1099,7 @@ export default function SetlogPrototype() {
           思い出にする
           <span className="button-arrow">›</span>
         </button>
-        <button type="button" className="secondary-button" onClick={beginRecordingFlow}>
+        <button type="button" className="secondary-button" onClick={() => beginRecordingFlow()}>
           まだ続ける
         </button>
       </section>
@@ -1227,27 +1239,30 @@ export default function SetlogPrototype() {
           </button>
         </div>
         <div className="album-list">
-          {sessions.map((session) => (
-            <button type="button" className="album-card" key={session.id} onClick={() => openDetail(session.id)}>
-              <span className={`album-pixel-icon ${getAlbumIcon(session.title)}`} aria-hidden="true" />
-              <div>
-                <div className="album-title">{session.title || "名前のない日"}</div>
-                <div className="album-meta">
-                  {formatDate(session.startedAt)} {formatTime(session.startedAt)}〜{formatTime(session.endedAt)}
+          {sessions.map((session) => {
+            const participantLabel = session.participantIds.length > 0 ? `${session.participantIds.length}人` : "人物はあとで";
+            return (
+              <button type="button" className="album-card" key={session.id} onClick={() => openDetail(session.id)}>
+                <span className={`album-pixel-icon ${getAlbumIcon(session.title)}`} aria-hidden="true" />
+                <div>
+                  <div className="album-title">{session.title || "名前のない日"}</div>
+                  <div className="album-meta">
+                    {formatDate(session.startedAt)} {formatTime(session.startedAt)}〜{formatTime(session.endedAt)}
+                  </div>
+                  <div className="album-meta">
+                    ♙ {participantLabel}　◷ {durationLabel(session.startedAt, session.endedAt)}
+                  </div>
                 </div>
-                <div className="album-meta">
-                  ♙ {session.participantIds.length}人　◷ {durationLabel(session.startedAt, session.endedAt)}
+                <div className="portrait-stack">
+                  {session.participantIds.map((id) => {
+                    const person = peopleById.get(id);
+                    return person ? <img src={person.drawingDataUrl} alt="" key={id} /> : null;
+                  })}
                 </div>
-              </div>
-              <div className="portrait-stack">
-                {session.participantIds.map((id) => {
-                  const person = peopleById.get(id);
-                  return person ? <img src={person.drawingDataUrl} alt="" key={id} /> : null;
-                })}
-              </div>
-              <span className="card-arrow">›</span>
-            </button>
-          ))}
+                <span className="card-arrow">›</span>
+              </button>
+            );
+          })}
         </div>
       </section>
     );
@@ -1304,17 +1319,21 @@ export default function SetlogPrototype() {
             ▶
           </button>
         </div>
-        <div className="participant-strip">
-          {activeSession.participantIds.map((id) => {
-            const person = peopleById.get(id);
-            return person ? (
-              <span className="strip-person" key={id}>
-                <img src={person.drawingDataUrl} alt="" />
-                <span>{person.name}</span>
-              </span>
-            ) : null;
-          })}
-        </div>
+        {activeSession.participantIds.length > 0 ? (
+          <div className="participant-strip">
+            {activeSession.participantIds.map((id) => {
+              const person = peopleById.get(id);
+              return person ? (
+                <span className="strip-person" key={id}>
+                  <img src={person.drawingDataUrl} alt="" />
+                  <span>{person.name}</span>
+                </span>
+              ) : null;
+            })}
+          </div>
+        ) : (
+          <div className="later-note wide">人物はあとで設定できます</div>
+        )}
         {activeSession.audioDeleted ? <div className="audio-deleted-note">音声は削除済み</div> : renderPrivacyNote(true)}
         {renderTimeline(activeSession)}
         {renderCorrectionSheet()}
@@ -1366,15 +1385,13 @@ export default function SetlogPrototype() {
             <>
               <h2>話した人を変更</h2>
               <div className="assign-grid compact">
-                {activeSession.participantIds.map((id) => {
-                  const person = peopleById.get(id);
-                  if (!person) return null;
+                {people.map((person) => {
                   return (
                     <button
                       type="button"
-                      className={pendingSpeakerPersonId === id ? "person-choice selected" : "person-choice"}
-                      key={id}
-                      onClick={() => setPendingSpeakerPersonId(id)}
+                      className={pendingSpeakerPersonId === person.id ? "person-choice selected" : "person-choice"}
+                      key={person.id}
+                      onClick={() => setPendingSpeakerPersonId(person.id)}
                     >
                       <img src={person.drawingDataUrl} alt="" />
                       <span>{person.name}</span>
@@ -1433,17 +1450,21 @@ export default function SetlogPrototype() {
             {formatDate(session.startedAt)} {formatTime(session.startedAt)} - {formatTime(session.endedAt)}
           </p>
         </div>
-        <div className="participant-strip compact">
-          {session.participantIds.map((id) => {
-            const person = peopleById.get(id);
-            return person ? (
-              <span className="strip-person" key={id}>
-                <img src={person.drawingDataUrl} alt="" />
-                <span>{person.name}</span>
-              </span>
-            ) : null;
-          })}
-        </div>
+        {session.participantIds.length > 0 ? (
+          <div className="participant-strip compact">
+            {session.participantIds.map((id) => {
+              const person = peopleById.get(id);
+              return person ? (
+                <span className="strip-person" key={id}>
+                  <img src={person.drawingDataUrl} alt="" />
+                  <span>{person.name}</span>
+                </span>
+              ) : null;
+            })}
+          </div>
+        ) : (
+          <div className="later-note wide compact">人物はあとで設定できます</div>
+        )}
         <div className="chat-playback-list" ref={playbackScrollerRef}>
           {visibleUtterances.map((utterance) => {
             const person = utterance.personId ? peopleById.get(utterance.personId) : null;
