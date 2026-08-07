@@ -1,0 +1,17 @@
+{
+  "name": "SETLOG",
+  "short_name": "SETLOG",
+  "description": "何気ない会話を、思い出として振り返るためのアルバム",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f7f6ef",
+  "theme_color": "#f7f6ef",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

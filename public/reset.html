@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SETLOG RESET</title>
+    <style>
+      :root {
+        --paper: #f7f6ef;
+        --ink: #222;
+        --pink: #ff2d87;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        min-height: 100dvh;
+        margin: 0;
+        display: grid;
+        place-items: center;
+        background:
+          linear-gradient(rgba(34, 34, 34, 0.06) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(34, 34, 34, 0.06) 1px, transparent 1px),
+          var(--paper);
+        background-size: 18px 18px;
+        color: var(--ink);
+        font-family: "Courier New", monospace;
+      }
+
+      main {
+        width: min(88vw, 360px);
+        border: 2px dashed var(--ink);
+        padding: 24px;
+        background: rgba(255, 255, 255, 0.6);
+        box-shadow: 4px 4px 0 var(--ink);
+      }
+
+      h1 {
+        margin: 0 0 14px;
+        font-size: 22px;
+      }
+
+      p {
+        line-height: 1.7;
+        margin: 0 0 18px;
+      }
+
+      a {
+        display: block;
+        border: 2px solid var(--ink);
+        background: var(--pink);
+        color: white;
+        padding: 14px;
+        text-align: center;
+        text-decoration: none;
+        font-weight: 900;
+        box-shadow: 4px 4px 0 var(--ink);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>SETLOGを更新中</h1>
+      <p>古い画面キャッシュを消しています。数秒で新しい画面へ戻ります。</p>
+      <a href="./?fresh=1">戻る</a>
+    </main>
+    <script>
+      async function resetSetlog() {
+        try {
+          if ("serviceWorker" in navigator) {
+            const registrations = await navigator.serviceWorker.getRegistrations();
+            await Promise.all(registrations.map((registration) => registration.unregister()));
+          }
+
+          if ("caches" in window) {
+            const keys = await caches.keys();
+            await Promise.all(keys.filter((key) => key.startsWith("setlog-prototype")).map((key) => caches.delete(key)));
+          }
+        } finally {
+          const base = window.location.pathname.replace(/\/reset\.html$/, "");
+          window.location.replace(base + "/?fresh=" + Date.now());
+        }
+      }
+
+      resetSetlog();
+    </script>
+  </body>
+</html>
