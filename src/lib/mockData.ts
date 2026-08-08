@@ -77,18 +77,75 @@ export function createMockUtterances(): Utterance[] {
       startTimeMs: 15100,
       endTimeMs: 17400,
       confidence: 0.9
+    },
+    {
+      id: "utt-6",
+      speakerId: "speaker-b",
+      personId: "person-kana",
+      text: "このあとデザートいける人いる？",
+      startTimeMs: 151000,
+      endTimeMs: 153300,
+      confidence: 0.91
+    },
+    {
+      id: "utt-7",
+      speakerId: "speaker-a",
+      personId: "person-yuta",
+      text: "俺は別腹が四つある",
+      startTimeMs: 154500,
+      endTimeMs: 156700,
+      confidence: 0.89
+    },
+    {
+      id: "utt-8",
+      speakerId: "speaker-d",
+      personId: "person-me",
+      text: "それもう胃袋じゃなくて収納だよ",
+      startTimeMs: 158400,
+      endTimeMs: 161100,
+      confidence: 0.9
+    },
+    {
+      id: "utt-9",
+      speakerId: "speaker-c",
+      personId: "person-shota",
+      text: "じゃあ帰りは収納担当で",
+      startTimeMs: 166000,
+      endTimeMs: 168100,
+      confidence: 0.9
+    },
+    {
+      id: "utt-10",
+      speakerId: "speaker-d",
+      personId: "person-me",
+      text: "あの時の写真、全員目つぶってた",
+      startTimeMs: 311000,
+      endTimeMs: 313800,
+      confidence: 0.92
+    },
+    {
+      id: "utt-11",
+      speakerId: "speaker-b",
+      personId: "person-kana",
+      text: "それ奇跡の集合写真じゃん",
+      startTimeMs: 315000,
+      endTimeMs: 317100,
+      confidence: 0.91
+    },
+    {
+      id: "utt-12",
+      speakerId: "speaker-a",
+      personId: "person-yuta",
+      text: "思い出ってそういうことでしょ",
+      startTimeMs: 319200,
+      endTimeMs: 321500,
+      confidence: 0.9
     }
   ];
 }
 
 export function createMockEvents(): ConversationEvent[] {
   return [
-    {
-      id: "event-toast-1",
-      type: "toast",
-      startTimeMs: 500,
-      participantIds: ["person-yuta", "person-kana", "person-shota", "person-me"]
-    },
     {
       id: "event-laugh-1",
       type: "laugh",
@@ -110,28 +167,54 @@ export function createMockEvents(): ConversationEvent[] {
       participantIds: ["person-yuta", "person-kana", "person-shota"]
     },
     {
-      id: "event-photo-1",
-      type: "photo",
-      startTimeMs: 21300
+      id: "event-laugh-3",
+      type: "laugh",
+      startTimeMs: 162200,
+      endTimeMs: 164200,
+      participantIds: ["person-yuta", "person-kana", "person-me"]
+    },
+    {
+      id: "event-laugh-4",
+      type: "laugh",
+      startTimeMs: 169000,
+      endTimeMs: 170100,
+      participantIds: ["person-shota", "person-me"]
+    },
+    {
+      id: "event-laugh-5",
+      type: "laugh",
+      startTimeMs: 322600,
+      endTimeMs: 324000,
+      participantIds: ["person-yuta", "person-kana", "person-me"]
     }
   ];
 }
 
 export function createSeedSession(): ConversationSession {
+  const utterances = createMockUtterances().slice(0, 5);
+  const events = createMockEvents().slice(0, 3);
+  const clipEndedAt = new Date(new Date(seedStartedAt).getTime() + 49200).toISOString();
+
   return {
     id: "session-yakiniku",
-    title: "焼肉",
+    title: "焼肉 01",
     startedAt: seedStartedAt,
-    endedAt: seedEndedAt,
+    endedAt: clipEndedAt,
+    memoryKind: "clip",
+    sourceStartedAt: seedStartedAt,
+    sourceEndedAt: seedEndedAt,
     participantIds: ["person-yuta", "person-kana", "person-shota", "person-me"],
     speakerAssignments: {
       "speaker-a": "person-yuta",
       "speaker-b": "person-kana",
       "speaker-c": "person-shota"
     },
-    utterances: createMockUtterances(),
-    events: createMockEvents(),
+    utterances,
+    events,
     audioDeleted: true,
+    clipAudioStored: true,
+    clipAudioDataUrl: null,
+    laughCount: 2,
     createdAt: "2026-08-06T12:45:00.000Z"
   };
 }

@@ -10,11 +10,17 @@ export type ConversationSession = {
   title?: string;
   startedAt: string;
   endedAt: string;
+  memoryKind?: "clip" | "session";
+  sourceStartedAt?: string;
+  sourceEndedAt?: string;
   participantIds: string[];
   speakerAssignments: Record<string, string | null>;
   utterances: Utterance[];
   events: ConversationEvent[];
   audioDeleted: boolean;
+  clipAudioStored?: boolean;
+  clipAudioDataUrl?: string | null;
+  laughCount?: number;
   createdAt: string;
 };
 

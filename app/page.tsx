@@ -15,6 +15,7 @@ type Screen =
   | "finish"
   | "processing"
   | "process-error"
+  | "candidates"
   | "post-participants"
   | "speaker-assign"
   | "title"
@@ -81,18 +82,25 @@ type TimelineItem =
     utterance: Utterance;
   };
 
+type MemoryCandidate = {
+  id: string;
+  index: number;
+  startTimeMs: number;
+  endTimeMs: number;
+  laughEventIds: string[];
+  laughCount: number;
+  utteranceCount: number;
+};
+
 const processingSteps = [
-  "話者を分けています",
-  "会話の順番を整えています",
-  "笑ったタイミングを記録しています",
-  "音声を削除しています"
+  "笑いが起きた時間を探しています",
+  "前後だけを候補にしています",
+  "声の順番を整えています",
+  "候補以外を削除しています"
 ];
 
 const eventFilterOptions: { value: ConversationEvent["type"]; label: string }[] = [
-  { value: "laugh", label: "笑い" },
-  { value: "photo", label: "写真" },
-  { value: "toast", label: "乾杯" },
-  { value: "movement", label: "移動" }
+  { value: "laugh", label: "笑い" }
 ];
 
 const titleKeywordRules = [
@@ -173,7 +181,8 @@ function getPlaybackUtterances(session: ConversationSession) {
 
 function getPlaybackDurationMs(session: ConversationSession) {
   const utteranceEnd = Math.max(0, ...getPlaybackUtterances(session).map((utterance) => utterance.endTimeMs));
-  return Math.max(utteranceEnd, 1000);
+  const eventEnd = Math.max(0, ...session.events.map((event) => event.endTimeMs ?? event.startTimeMs + 1400));
+  return Math.max(utteranceEnd, eventEnd, 1000);
 }
 
 function typedUtteranceText(utterance: Utterance, playbackMs: number) {
@@ -195,6 +204,119 @@ function suggestTitleFromSession(session: ConversationSession) {
   return cleaned || `${formatDate(session.startedAt)}の会話`;
 }
 
+const clipBeforeLaughMs = 60000;
+const clipAfterLaughMs = 30000;
+const clipMaxMs = 120000;
+const laughMergeGapMs = 15000;
+
+function rangesOverlap(startA: number, endA: number, startB: number, endB: number) {
+  return startA <= endB && endA >= startB;
+}
+
+function buildMemoryCandidates(session: ConversationSession): MemoryCandidate[] {
+  const sessionDuration = getSessionDurationMs(session);
+  const laughEvents = session.events
+    .filter((event) => event.type === "laugh")
+    .sort((a, b) => a.startTimeMs - b.startTimeMs);
+  const candidates: MemoryCandidate[] = [];
+
+  for (const event of laughEvents) {
+    const eventEnd = event.endTimeMs ?? event.startTimeMs + 1200;
+    let startTimeMs = Math.max(0, event.startTimeMs - clipBeforeLaughMs);
+    let endTimeMs = Math.min(sessionDuration, eventEnd + clipAfterLaughMs);
+
+    if (endTimeMs - startTimeMs > clipMaxMs) {
+      startTimeMs = Math.max(0, endTimeMs - clipMaxMs);
+    }
+
+    const previous = candidates.at(-1);
+    if (previous && startTimeMs <= previous.endTimeMs + laughMergeGapMs) {
+      const mergedEnd = Math.min(sessionDuration, Math.max(previous.endTimeMs, endTimeMs));
+      previous.endTimeMs = mergedEnd;
+      if (previous.endTimeMs - previous.startTimeMs > clipMaxMs) {
+        previous.startTimeMs = Math.max(0, previous.endTimeMs - clipMaxMs);
+      }
+      previous.laughEventIds.push(event.id);
+      previous.laughCount += 1;
+      previous.utteranceCount = session.utterances.filter((utterance) =>
+        rangesOverlap(utterance.startTimeMs, utterance.endTimeMs, previous.startTimeMs, previous.endTimeMs)
+      ).length;
+      continue;
+    }
+
+    candidates.push({
+      id: makeId("candidate"),
+      index: candidates.length + 1,
+      startTimeMs,
+      endTimeMs,
+      laughEventIds: [event.id],
+      laughCount: 1,
+      utteranceCount: session.utterances.filter((utterance) =>
+        rangesOverlap(utterance.startTimeMs, utterance.endTimeMs, startTimeMs, endTimeMs)
+      ).length
+    });
+  }
+
+  return candidates;
+}
+
+function createClipSessionFromCandidate(session: ConversationSession, candidate: MemoryCandidate, options?: { preview?: boolean }) {
+  const sessionStartedAt = new Date(session.startedAt).getTime();
+  const clipStartedAt = new Date(sessionStartedAt + candidate.startTimeMs).toISOString();
+  const clipEndedAt = new Date(sessionStartedAt + candidate.endTimeMs).toISOString();
+  const utterances = session.utterances
+    .filter((utterance) => rangesOverlap(utterance.startTimeMs, utterance.endTimeMs, candidate.startTimeMs, candidate.endTimeMs))
+    .map((utterance) => ({
+      ...utterance,
+      id: makeId("utt"),
+      startTimeMs: Math.max(0, utterance.startTimeMs - candidate.startTimeMs),
+      endTimeMs: Math.max(500, utterance.endTimeMs - candidate.startTimeMs)
+    }));
+  const events = session.events
+    .filter((event) => {
+      const eventEnd = event.endTimeMs ?? event.startTimeMs + 1200;
+      return rangesOverlap(event.startTimeMs, eventEnd, candidate.startTimeMs, candidate.endTimeMs);
+    })
+    .map((event) => ({
+      ...event,
+      id: makeId("event"),
+      startTimeMs: Math.max(0, event.startTimeMs - candidate.startTimeMs),
+      endTimeMs: event.endTimeMs ? Math.max(500, event.endTimeMs - candidate.startTimeMs) : undefined
+    }));
+  const speakerIds = Array.from(new Set(utterances.map((utterance) => utterance.speakerId)));
+  const speakerAssignments = Object.fromEntries(
+    (speakerIds.length > 0 ? speakerIds : Object.keys(session.speakerAssignments)).map((speakerId) => [
+      speakerId,
+      session.speakerAssignments[speakerId] ?? null
+    ])
+  );
+  const baseClip: ConversationSession = {
+    ...session,
+    id: options?.preview ? `preview-${candidate.id}` : makeId("clip"),
+    title: undefined,
+    startedAt: clipStartedAt,
+    endedAt: clipEndedAt,
+    memoryKind: "clip",
+    sourceStartedAt: session.startedAt,
+    sourceEndedAt: session.endedAt,
+    participantIds: session.participantIds,
+    speakerAssignments,
+    utterances,
+    events,
+    audioDeleted: true,
+    clipAudioStored: true,
+    clipAudioDataUrl: null,
+    laughCount: candidate.laughCount,
+    createdAt: new Date().toISOString()
+  };
+  const suffix = String(candidate.index).padStart(2, "0");
+
+  return {
+    ...baseClip,
+    title: `${suggestTitleFromSession(baseClip)} ${suffix}`
+  };
+}
+
 function getAlbumIcon(title?: string) {
   const label = title ?? "";
   if (label.includes("焼肉")) return "grill";
@@ -210,6 +332,9 @@ export default function SetlogPrototype() {
   const [sessions, setSessions] = useState<ConversationSession[]>([]);
   const [selectedParticipantIds, setSelectedParticipantIds] = useState<string[]>([]);
   const [tempSession, setTempSession] = useState<ConversationSession | null>(null);
+  const [previewSession, setPreviewSession] = useState<ConversationSession | null>(null);
+  const [memoryCandidates, setMemoryCandidates] = useState<MemoryCandidate[]>([]);
+  const [selectedMemoryCandidateIds, setSelectedMemoryCandidateIds] = useState<string[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [activePersonId, setActivePersonId] = useState<string | null>(null);
   const [newPersonName, setNewPersonName] = useState("");
@@ -244,6 +369,7 @@ export default function SetlogPrototype() {
   const recordingChunksRef = useRef<Blob[]>([]);
   const capturedTranscriptsRef = useRef<CapturedTranscript[]>([]);
   const temporaryAudioRef = useRef<Blob | null>(null);
+  const recordingMimeTypeRef = useRef("audio/webm");
   const recordingStartedAtRef = useRef<string>("");
   const recordingEndedAtRef = useRef<string>("");
   const processingStartedRef = useRef(false);
@@ -335,11 +461,15 @@ export default function SetlogPrototype() {
 
         temporaryAudioRef.current = null;
         setTempSession(session);
+        const candidates = buildMemoryCandidates(session);
+        setMemoryCandidates(candidates);
+        setSelectedMemoryCandidateIds([]);
+        setPreviewSession(null);
         setTitleInput(suggestTitleFromSession(session));
         setParticipantCount(Math.min(4, Math.max(2, Object.keys(session.speakerAssignments).length || 3)));
         setSelectedParticipantIds(session.participantIds);
         setAssignmentIndex(0);
-        setScreen("post-participants");
+        setScreen("candidates");
       } catch {
         recordingChunksRef.current = [];
         temporaryAudioRef.current = null;
@@ -355,10 +485,12 @@ export default function SetlogPrototype() {
   }, [screen, selectedParticipantIds]);
 
   const peopleById = useMemo(() => new Map(people.map((person) => [person.id, person])), [people]);
-  const activeSession = useMemo(
-    () => sessions.find((session) => session.id === activeSessionId) ?? tempSession ?? sessions[0] ?? null,
-    [activeSessionId, sessions, tempSession]
-  );
+  const activeSession = useMemo(() => {
+    if (previewSession && activeSessionId === previewSession.id) {
+      return previewSession;
+    }
+    return sessions.find((session) => session.id === activeSessionId) ?? tempSession ?? sessions[0] ?? null;
+  }, [activeSessionId, sessions, tempSession, previewSession]);
   const activePerson = activePersonId ? peopleById.get(activePersonId) ?? null : null;
   const selectedPeople = selectedParticipantIds.map((id) => peopleById.get(id)).filter(Boolean) as Person[];
 
@@ -476,6 +608,38 @@ export default function SetlogPrototype() {
     saveConversation(undefined, updated);
   }
 
+  function toggleMemoryCandidate(candidateId: string) {
+    setSelectedMemoryCandidateIds((current) => {
+      if (current.includes(candidateId)) {
+        return current.filter((id) => id !== candidateId);
+      }
+      return [...current, candidateId];
+    });
+  }
+
+  function previewMemoryCandidate(candidateId: string) {
+    if (!tempSession) return;
+    const candidate = memoryCandidates.find((item) => item.id === candidateId);
+    if (!candidate) return;
+    const preview = createClipSessionFromCandidate(tempSession, candidate, { preview: true });
+    setPreviewSession(preview);
+    setActiveSessionId(preview.id);
+    setPlaybackMs(0);
+    setPlaybackRunning(true);
+    setScreen("playback");
+  }
+
+  function moveSelectedCandidatesForward() {
+    if (selectedMemoryCandidateIds.length === 0) return;
+    setSelectedParticipantIds([]);
+    setScreen("post-participants");
+  }
+
+  function discardCandidateDraft() {
+    resetDraft();
+    setScreen("home");
+  }
+
   function saveNewPerson(drawingDataUrl: string) {
     const name = newPersonName.trim();
     if (!name) return;
@@ -509,9 +673,21 @@ export default function SetlogPrototype() {
     }
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          autoGainControl: true,
+          echoCancellation: false,
+          noiseSuppression: false,
+          channelCount: 1,
+          sampleRate: 48000
+        }
+      });
       streamRef.current = stream;
-      const recorder = new MediaRecorder(stream);
+      const preferredMimeType = ["audio/webm;codecs=opus", "audio/mp4", "audio/webm"].find((mimeType) =>
+        MediaRecorder.isTypeSupported(mimeType)
+      );
+      const recorder = preferredMimeType ? new MediaRecorder(stream, { mimeType: preferredMimeType }) : new MediaRecorder(stream);
+      recordingMimeTypeRef.current = recorder.mimeType || preferredMimeType || "audio/webm";
       recorderRef.current = recorder;
       recorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
@@ -617,6 +793,8 @@ export default function SetlogPrototype() {
 
     const audioContext = new AudioContextClass();
     const analyser = audioContext.createAnalyser();
+    analyser.fftSize = 1024;
+    analyser.smoothingTimeConstant = 0.58;
     const source = audioContext.createMediaStreamSource(stream);
     const data = new Uint8Array(analyser.fftSize);
     let quietFrames = 0;
@@ -630,9 +808,9 @@ export default function SetlogPrototype() {
         total += normalized * normalized;
       }
       const level = Math.sqrt(total / data.length);
-      setAudioLevel(Math.min(1, level * 6));
-      quietFrames = level < 0.015 ? quietFrames + 1 : 0;
-      setLowVolume(quietFrames > 240);
+      setAudioLevel(Math.min(1, level * 10));
+      quietFrames = level < 0.012 ? quietFrames + 1 : 0;
+      setLowVolume(quietFrames > 180);
       animationRef.current = window.requestAnimationFrame(tick);
     }
     tick();
@@ -656,7 +834,7 @@ export default function SetlogPrototype() {
     streamRef.current = null;
 
     if (recordingChunksRef.current.length > 0) {
-      temporaryAudioRef.current = new Blob(recordingChunksRef.current, { type: "audio/webm" });
+      temporaryAudioRef.current = new Blob(recordingChunksRef.current, { type: recordingMimeTypeRef.current });
     }
   }
 
@@ -717,6 +895,9 @@ export default function SetlogPrototype() {
     setCapturedTranscriptCount(0);
     setSpeechCaptureStatus("idle");
     setTempSession(null);
+    setPreviewSession(null);
+    setMemoryCandidates([]);
+    setSelectedMemoryCandidateIds([]);
     setTitleInput("");
     setAssignmentIndex(0);
     setParticipantCount(3);
@@ -757,6 +938,20 @@ export default function SetlogPrototype() {
   function saveConversation(title?: string, sourceSession?: ConversationSession) {
     const session = sourceSession ?? tempSession;
     if (!session) return;
+    const selectedCandidates = memoryCandidates.filter((candidate) => selectedMemoryCandidateIds.includes(candidate.id));
+
+    if (selectedCandidates.length > 0) {
+      const savedClips = selectedCandidates.map((candidate) => createClipSessionFromCandidate(session, candidate));
+      replaceSessions([...savedClips, ...sessions.filter((existing) => !savedClips.some((clip) => clip.id === existing.id))]);
+      setTempSession(savedClips[0]);
+      setPreviewSession(null);
+      setMemoryCandidates([]);
+      setSelectedMemoryCandidateIds([]);
+      setActiveSessionId(savedClips[0].id);
+      setScreen("done");
+      return;
+    }
+
     const trimmed = title?.trim();
     const saved: ConversationSession = {
       ...session,
@@ -771,6 +966,7 @@ export default function SetlogPrototype() {
   }
 
   function openDetail(sessionId: string) {
+    setPreviewSession(null);
     setActiveSessionId(sessionId);
     setPlaybackRunning(false);
     setPlaybackMs(0);
@@ -778,6 +974,7 @@ export default function SetlogPrototype() {
   }
 
   function openPlayback(sessionId: string) {
+    setPreviewSession(null);
     setActiveSessionId(sessionId);
     setPlaybackMs(0);
     setPlaybackRunning(true);
@@ -862,7 +1059,7 @@ export default function SetlogPrototype() {
     return (
       <div className={compact ? "privacy-note compact" : "privacy-note"}>
         <span className="pixel-lock" aria-hidden="true" />
-        <span>音声は会話を整理したあと削除されます。</span>
+        <span>全文は残しません。笑い前後だけ候補になります。</span>
       </div>
     );
   }
@@ -937,10 +1134,10 @@ export default function SetlogPrototype() {
     );
   }
 
-  function renderTopBar(label?: string) {
+  function renderTopBar(label?: string, onBack?: () => void) {
     return (
       <div className="top-bar">
-        <button type="button" className="icon-button" onClick={() => setScreen("home")} aria-label="ホームへ戻る">
+        <button type="button" className="icon-button" onClick={onBack ?? (() => setScreen("home"))} aria-label="戻る">
           ←
         </button>
         <span className="top-title">{label ?? "SETLOG"}</span>
@@ -962,6 +1159,10 @@ export default function SetlogPrototype() {
             ON AIR
           </div>
         </header>
+        <div className="home-slogan">
+          <span>SNAP TALK</span>
+          <strong>あの日、何で笑ってたっけ。</strong>
+        </div>
 
         <button
           type="button"
@@ -986,7 +1187,7 @@ export default function SetlogPrototype() {
 
         <div className="bottom-actions">
           <button type="button" className="text-button" onClick={() => setScreen("album")}>
-            ▣ 過去の会話を見る ›
+            ▣ アルバム ›
           </button>
         </div>
       </section>
@@ -1071,27 +1272,35 @@ export default function SetlogPrototype() {
         <div className="recording-header">
           <span>
             <span className="record-dot" />
-            RECORDING
+            LIVE
           </span>
-          {renderHearts()}
           <span>{shortDuration(elapsed)}</span>
         </div>
-        <div className="mini-portraits">
-          {selectedPeople.length > 0 ? (
-            selectedPeople.map((person) => renderPersonChip(person, true))
-          ) : (
-            <span className="later-note">人物はあとで設定できます</span>
-          )}
+        <div className="onair-stage" aria-label="ON AIR">
+          <div className="broadcast-frame">
+            <span />
+            ON AIR
+          </div>
+          <div className="air-meter" aria-hidden="true">
+            <span style={{ height: `${20 + audioLevel * 40}px` }} />
+            <span style={{ height: `${30 + audioLevel * 48}px` }} />
+            <span style={{ height: `${18 + audioLevel * 44}px` }} />
+            <span style={{ height: `${26 + audioLevel * 36}px` }} />
+          </div>
+          <div className="decay-visual" aria-hidden="true">
+            <span className="decay-pixel d0" />
+            <span className="decay-pixel d1" />
+            <span className="decay-pixel d2" />
+            <span className="decay-pixel d3" />
+            <span className="decay-pixel d4" />
+            <span className="decay-pixel d5" />
+          </div>
+          <div className="laugh-catch" aria-hidden="true">
+            <span>😂</span>
+            <i>♡</i>
+          </div>
         </div>
-        <div className="signal-box" aria-label="音声の取得状態">
-          <span style={{ height: `${24 + audioLevel * 52}px` }} />
-          <span style={{ height: `${42 + audioLevel * 40}px` }} />
-          <span style={{ height: `${28 + audioLevel * 56}px` }} />
-          <span style={{ height: `${36 + audioLevel * 44}px` }} />
-        </div>
-        <h1>今日を残しています</h1>
-        <p className="lead">スマホをみんなの近くに置いてください</p>
-        {renderSpeechCaptureNote()}
+        <p className="onair-caption">古い音から消えていきます</p>
         {micMessage ? <div className="error-card">{micMessage}</div> : null}
         {isOffline ? <div className="notice-card">記録は続いています<br />通信が戻ったら整理します</div> : null}
         {lowVolume ? <div className="notice-card">声が少し遠いようです<br />スマホをみんなの近くに置いてください</div> : null}
@@ -1108,8 +1317,8 @@ export default function SetlogPrototype() {
     return (
       <section className="screen-section center-screen">
         <h1>FINISH?</h1>
-        <h2>今日を閉じる？</h2>
-        <p className="lead">会話を整理して、思い出にしまいます。</p>
+        <h2>ON AIRを閉じる？</h2>
+        <p className="lead">笑いの前後だけを候補にします。残すかどうかはあとで選べます。</p>
         <div className="finish-icon" aria-hidden="true">
           <div className="pixel-mic small">
             <span />
@@ -1118,7 +1327,7 @@ export default function SetlogPrototype() {
           </div>
         </div>
         <button type="button" className="primary-button huge" onClick={() => setScreen("processing")}>
-          思い出にする
+          候補を見る
           <span className="button-arrow">›</span>
         </button>
         <button type="button" className="secondary-button" onClick={() => beginRecordingFlow()}>
@@ -1132,7 +1341,7 @@ export default function SetlogPrototype() {
     return (
       <section className="screen-section center-screen">
         <div className="pixel-loader" aria-hidden="true" />
-        <h1>今日を整理しています</h1>
+        <h1>笑った前後を探しています</h1>
         <div className="processing-list">
           {processingSteps.map((step) => (
             <div className={processingLog.includes(step) ? "processing-item done" : "processing-item"} key={step}>
@@ -1141,7 +1350,7 @@ export default function SetlogPrototype() {
             </div>
           ))}
         </div>
-        <div className="audio-deleted-note">音声は保存されません</div>
+        <div className="audio-deleted-note">候補以外の音声は残りません</div>
       </section>
     );
   }
@@ -1154,6 +1363,75 @@ export default function SetlogPrototype() {
         <button type="button" className="primary-button" onClick={() => setScreen("home")}>
           ホームへ戻る
         </button>
+      </section>
+    );
+  }
+
+  function renderCandidates() {
+    if (!tempSession) return null;
+    const hasSelection = selectedMemoryCandidateIds.length > 0;
+
+    if (memoryCandidates.length === 0) {
+      return (
+        <section className="screen-section center-screen">
+          {renderTopBar("TODAY")}
+          <div className="empty-candidate">
+            <strong>NO SNAP</strong>
+            <span>😂</span>
+          </div>
+          <h1>候補はありません</h1>
+          <p className="lead">今回は笑いの前後として残す候補が見つかりませんでした。全文は保存しません。</p>
+          <button type="button" className="primary-button huge" onClick={discardCandidateDraft}>
+            ホームへ戻る
+          </button>
+        </section>
+      );
+    }
+
+    return (
+      <section className="screen-section">
+        {renderTopBar("TODAY")}
+        <div className="candidate-head">
+          <h1>思い出候補</h1>
+          <p>
+            {memoryCandidates.length}件
+            <span>AIは面白さを決めません</span>
+          </p>
+        </div>
+        <div className="candidate-list">
+          {memoryCandidates.map((candidate) => {
+            const selected = selectedMemoryCandidateIds.includes(candidate.id);
+            return (
+              <div className={selected ? "candidate-card selected" : "candidate-card"} key={candidate.id}>
+                <button type="button" className="candidate-main" onClick={() => previewMemoryCandidate(candidate.id)}>
+                  <span className="candidate-number">{String(candidate.index).padStart(2, "0")}</span>
+                  <span className="candidate-time">{formatTimelineTime(tempSession, candidate.startTimeMs)}</span>
+                  <span className="candidate-duration">{shortDuration(candidate.endTimeMs - candidate.startTimeMs)}</span>
+                  <span className="candidate-laughs" aria-label={`笑い ${candidate.laughCount}回`}>
+                    {Array.from({ length: candidate.laughCount }, () => "😂").join("")}
+                  </span>
+                  <small>{candidate.utteranceCount} utterances / tap preview</small>
+                </button>
+                <button type="button" className="candidate-keep" onClick={() => toggleMemoryCandidate(candidate.id)}>
+                  {selected ? "消す" : "残す"}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+        <div className="candidate-privacy">
+          <span className="pixel-lock" aria-hidden="true" />
+          <span>選ばなかった候補と元音声は削除されます。</span>
+        </div>
+        <div className="sticky-action">
+          <button type="button" className="primary-button" disabled={!hasSelection} onClick={moveSelectedCandidatesForward}>
+            選んだものだけ残す
+            <span className="button-arrow">›</span>
+          </button>
+          <button type="button" className="text-button" onClick={discardCandidateDraft}>
+            すべて消す
+          </button>
+        </div>
       </section>
     );
   }
@@ -1246,7 +1524,7 @@ export default function SetlogPrototype() {
       <section className="screen-section">
         {renderTopBar("VOICE")}
         <h1>この声は誰？</h1>
-        <p className="lead">音声は保存しないため、今は発言テキストで確認します。</p>
+        <p className="lead">プロトタイプでは発言テキストで確認します。</p>
         <div className="quote-box">「{sample?.text ?? "うまく聞き取れない部分"}」</div>
         <div className="assign-grid">
           {selectedPeople.map((person) => (
@@ -1291,11 +1569,11 @@ export default function SetlogPrototype() {
         <div className="done-label">DONE!</div>
         <div className="pixel-heart" aria-hidden="true" />
         <h1>
-          今日の会話を
+          会話の一瞬を
           <br />
           アルバムにしました
         </h1>
-        <div className="audio-deleted-note">音声は削除済み</div>
+        <div className="audio-deleted-note">元音声と選ばなかった候補は削除済み</div>
         <button
           type="button"
           className="primary-button huge"
@@ -1317,6 +1595,7 @@ export default function SetlogPrototype() {
     return (
       <section className="screen-section">
         {renderTopBar("ALBUM")}
+        <h1>スナップショット</h1>
         <div className="month-label">2026年 8月</div>
         <div className="quick-nav">
           <button type="button" onClick={() => setScreen("people")}>
@@ -1338,7 +1617,8 @@ export default function SetlogPrototype() {
                     {formatDate(session.startedAt)} {formatTime(session.startedAt)}〜{formatTime(session.endedAt)}
                   </div>
                   <div className="album-meta">
-                    ♙ {participantLabel}　◷ {durationLabel(session.startedAt, session.endedAt)}
+                    😂 {session.laughCount ?? session.events.filter((event) => event.type === "laugh").length}　♙ {participantLabel}　◷{" "}
+                    {durationLabel(session.startedAt, session.endedAt)}
                   </div>
                 </div>
                 <div className="portrait-stack">
@@ -1413,7 +1693,13 @@ export default function SetlogPrototype() {
         ) : (
           <div className="later-note wide">人物はあとで設定できます</div>
         )}
-        {activeSession.audioDeleted ? <div className="audio-deleted-note">音声は削除済み</div> : renderPrivacyNote(true)}
+        {activeSession.memoryKind === "clip" ? (
+          <div className="audio-deleted-note">選んだクリップだけ保存 / 元音声は削除済み</div>
+        ) : activeSession.audioDeleted ? (
+          <div className="audio-deleted-note">音声は削除済み</div>
+        ) : (
+          renderPrivacyNote(true)
+        )}
         {renderTimeline(activeSession)}
         {renderCorrectionSheet()}
       </section>
@@ -1519,6 +1805,7 @@ export default function SetlogPrototype() {
     const progress = Math.min(100, (playbackMs / totalMs) * 100);
     const utterances = getPlaybackUtterances(session);
     const visibleUtterances = utterances.filter((utterance) => utterance.startTimeMs <= playbackMs);
+    const isCandidatePreview = previewSession?.id === session.id;
     const activeLaughEvents = session.events.filter((event) => {
       if (event.type !== "laugh") return false;
       const end = event.endTimeMs ?? event.startTimeMs + 1400;
@@ -1527,7 +1814,14 @@ export default function SetlogPrototype() {
 
     return (
       <section className="screen-section playback-screen">
-        {renderTopBar("REPLAY")}
+        {renderTopBar(isCandidatePreview ? "PREVIEW" : "REPLAY", () => {
+          setPlaybackRunning(false);
+          if (isCandidatePreview) {
+            setScreen("candidates");
+            return;
+          }
+          setScreen("home");
+        })}
         <div className="playback-head">
           <h1>{session.title || "名前のない日"}</h1>
           <p>
@@ -1623,6 +1917,18 @@ export default function SetlogPrototype() {
             <input type="checkbox" checked={compressSilence} onChange={(event) => setCompressSilence(event.target.checked)} />
             <span>長い沈黙を短くする</span>
           </label>
+          {isCandidatePreview ? (
+            <button
+              type="button"
+              className="secondary-button preview-back"
+              onClick={() => {
+                setPlaybackRunning(false);
+                setScreen("candidates");
+              }}
+            >
+              候補へ戻る
+            </button>
+          ) : null}
         </div>
       </section>
     );
@@ -1648,7 +1954,7 @@ export default function SetlogPrototype() {
               >
                 <img src={person.drawingDataUrl} alt="" />
                 <span>{person.name}</span>
-                <small>一緒に残した会話 {count}件</small>
+                <small>一緒に残したスナップ {count}件</small>
               </button>
             );
           })}
@@ -1667,7 +1973,7 @@ export default function SetlogPrototype() {
           <img src={activePerson.drawingDataUrl} alt="" />
           <div>
             <h1>{activePerson.name}</h1>
-            <p>一緒に残した会話 {personSessions.length}件</p>
+            <p>一緒に残したスナップ {personSessions.length}件</p>
           </div>
         </div>
         <div className="album-list compact">
@@ -1744,7 +2050,7 @@ export default function SetlogPrototype() {
             </option>
           ))}
         </select>
-        <div className="search-note">保存された会話テキストとメタデータだけを探します。</div>
+        <div className="search-note">残したスナップショットの文字とメタデータだけを探します。</div>
         <div className="album-list compact">
           {filteredSessions.map((session) => (
             <button type="button" className="memory-row" key={session.id} onClick={() => openDetail(session.id)}>
@@ -1767,6 +2073,7 @@ export default function SetlogPrototype() {
   if (screen === "finish") content = renderFinish();
   if (screen === "processing") content = renderProcessing();
   if (screen === "process-error") content = renderProcessError();
+  if (screen === "candidates") content = renderCandidates();
   if (screen === "post-participants") content = renderPostParticipants();
   if (screen === "speaker-assign") content = renderSpeakerAssign();
   if (screen === "title") content = renderTitleInput();

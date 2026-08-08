@@ -1,8 +1,8 @@
 import { createSeedPeople, createSeedSession } from "./mockData";
 import type { ConversationSession, Person } from "./types";
 
-const PEOPLE_KEY = "setlog.people.v1";
-const SESSIONS_KEY = "setlog.sessions.v1";
+const PEOPLE_KEY = "setlog.people.v2";
+const SESSIONS_KEY = "setlog.sessions.v2";
 
 function readJson<T>(key: string, fallback: T): T {
   if (typeof window === "undefined") {
